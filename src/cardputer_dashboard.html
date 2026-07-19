@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cardputer ADV — EXT Header Console</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0A1210;
+    --panel:#0E1A16;
+    --panel2:#0C1712;
+    --hair:#1E2E27;
+    --text:#CDE3D6;
+    --dim:#5E7A6E;
+    --dim2:#3E5A4D;
+
+    --free:#3FEE8F;      /* free GPIO - yours to use */
+    --uart:#5FC9F8;      /* dedicated UART - safe, just serial */
+    --i2c:#C792EA;       /* shared I2C bus */
+    --spi:#FFB347;       /* shared w/ onboard SD - caution */
+    --pwr:#FF6B5E;       /* power rail - handle with care */
+    --gndc:#7A8B84;      /* ground */
+
+    --mono:"IBM Plex Mono","SF Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{ margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--mono);-webkit-font-smoothing:antialiased; }
+  body{
+    padding:20px;min-height:100vh;
+    background-image:
+      linear-gradient(rgba(63,238,143,0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(63,238,143,0.035) 1px, transparent 1px);
+    background-size:24px 24px;
+  }
+
+  .frame{ max-width:1100px;margin:0 auto;border:1px solid var(--hair);background:var(--panel);border-radius:6px;overflow:hidden; }
+
+  header{ display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid var(--hair);background:linear-gradient(180deg,#0F1C17,#0C1712);flex-wrap:wrap; }
+  .led{ width:9px;height:9px;border-radius:50%;background:var(--pwr);box-shadow:0 0 6px var(--pwr);flex:none;transition:background .2s, box-shadow .2s; }
+  .led.live{ background:var(--free); box-shadow:0 0 8px var(--free); }
+  h1{ font-size:13px;letter-spacing:.14em;text-transform:uppercase;margin:0;color:var(--text);font-weight:600; }
+  .sub{ font-size:11px;color:var(--dim);letter-spacing:.05em; }
+  .spacer{ flex:1; }
+  select, button{ font-family:var(--mono);background:#0C1712;color:var(--text);border:1px solid var(--hair);padding:7px 12px;border-radius:4px;font-size:12px;letter-spacing:.03em;cursor:pointer; }
+  button.primary{ border-color:var(--free); color:var(--free); }
+  button.primary:hover{ background:rgba(63,238,143,0.08); }
+  button:disabled{ opacity:.35; cursor:not-allowed; }
+  button.stop{ border-color:var(--pwr); color:var(--pwr); }
+  button:focus-visible, select:focus-visible, .pin:focus-visible{ outline:2px solid var(--free); outline-offset:2px; }
+
+  section{ padding:16px 18px; border-bottom:1px solid var(--hair); }
+  section h2{ font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin:0 0 12px;display:flex;align-items:center;gap:10px; }
+  .legend-key{ display:flex;gap:12px;flex-wrap:wrap;font-size:10px;color:var(--dim);text-transform:none;letter-spacing:0; }
+  .legend-key i{ display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:-1px; }
+
+  /* --- EXT header visual: 7 rows x 2 cols, same order as the connector --- */
+  .header-shroud{
+    display:grid;grid-template-columns:1fr 1fr;gap:6px;
+    padding:14px;background:#08110D;border:1px solid var(--hair);border-radius:8px;
+    position:relative;
+  }
+  .header-shroud::before{
+    content:"EXT 2.54-14P";position:absolute;top:-9px;left:12px;
+    background:var(--panel);padding:0 6px;font-size:9px;color:var(--dim2);letter-spacing:.1em;
+  }
+  .pin{
+    border:1px solid var(--hair); border-radius:5px; background:var(--panel2);
+    padding:8px 10px; cursor:pointer; position:relative;
+    display:flex; align-items:center; gap:9px;
+    transition:border-color .12s, background .12s;
+  }
+  .pin:hover, .pin.open{ background:#101E18; }
+  .pin .dot{ width:7px;height:7px;border-radius:50%;flex:none;background:var(--dim2); }
+  .pin .dot.hi{ box-shadow:0 0 6px currentColor; }
+  .pin .meta{ flex:1; min-width:0; }
+  .pin .pos{ font-size:9px;color:var(--dim);letter-spacing:.08em; }
+  .pin .lbl{ font-size:12px;font-weight:600; }
+  .pin .rd{ font-size:11px;color:var(--dim);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+  .pin .bar-track{ height:3px;background:#132019;border-radius:2px;margin-top:5px;overflow:hidden; }
+  .pin .bar-fill{ height:100%;width:0%;transition:width .12s linear;background:var(--dim2); }
+
+  /* tooltip */
+  .tip{
+    position:fixed; z-index:50; max-width:300px;
+    background:#0A1512; border:1px solid var(--hair); border-radius:6px;
+    padding:12px 14px; font-size:11.5px; line-height:1.55; color:var(--text);
+    box-shadow:0 8px 24px rgba(0,0,0,.5);
+    pointer-events:none; opacity:0; transform:translateY(4px);
+    transition:opacity .12s, transform .12s;
+  }
+  .tip.show{ opacity:1; transform:translateY(0); }
+  .tip .t-head{ display:flex; align-items:baseline; gap:8px; margin-bottom:8px; }
+  .tip .t-gpio{ font-size:13px; font-weight:700; }
+  .tip .t-func{ font-size:10px; color:var(--dim); letter-spacing:.06em; }
+  .tip h4{ margin:8px 0 3px; font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--dim); }
+  .tip h4:first-of-type{ margin-top:0; }
+  .tip p{ margin:0; color:#B7CFC3; }
+  .tip .warn{ color:var(--spi); }
+
+  /* charts */
+  .grid2{ display:grid;grid-template-columns:1fr 1fr;gap:14px; }
+  .chartbox{ background:var(--panel2);border:1px solid var(--hair);border-radius:6px;padding:12px 14px; }
+  .chartbox h3{ font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin:0 0 8px;display:flex;justify-content:space-between; }
+  .chartbox .legend span{ margin-left:10px; }
+  canvas{ max-height:170px; }
+
+  /* i2c bus panel */
+  .buslist{ display:flex; flex-wrap:wrap; gap:6px; }
+  .chip{ font-size:11px; border:1px solid var(--hair); border-radius:4px; padding:4px 9px; color:var(--dim); }
+  .chip.on{ color:var(--i2c); border-color:var(--i2c); }
+  .chip .addr{ color:var(--dim2); margin-left:6px; }
+
+  footer{ padding:10px 18px; font-size:11px; color:var(--dim); display:flex; justify-content:space-between; gap:12px; background:var(--panel2); flex-wrap:wrap; }
+  #rawline{ color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:70%; }
+
+  .note{ max-width:1100px;margin:14px auto 0;font-size:11px;color:var(--dim);line-height:1.6; }
+  .note b{ color:var(--spi); font-weight:600; }
+
+  @media (max-width:720px){
+    .grid2{ grid-template-columns:1fr; }
+    #rawline{ max-width:100%; }
+  }
+</style>
+</head>
+<body>
+
+<div class="frame">
+  <header>
+    <div class="led" id="led"></div>
+    <div>
+      <h1>Cardputer ADV / Stamp-S3A</h1>
+      <div class="sub">EXT header console — all 14 pins, live</div>
+    </div>
+    <div class="spacer"></div>
+    <select id="baud">
+      <option value="115200" selected>115200</option>
+      <option value="921600">921600</option>
+    </select>
+    <button id="connectBtn" class="primary">Connect</button>
+    <button id="disconnectBtn" class="stop" disabled>Disconnect</button>
+  </header>
+
+  <section>
+    <h2>
+      <span>EXT header — pin 1 top-left, physical order</span>
+      <span class="legend-key">
+        <span><i style="background:var(--free)"></i>free GPIO</span>
+        <span><i style="background:var(--uart)"></i>UART</span>
+        <span><i style="background:var(--i2c)"></i>I2C bus</span>
+        <span><i style="background:var(--spi)"></i>SD-shared</span>
+        <span><i style="background:var(--pwr)"></i>power rail</span>
+        <span><i style="background:var(--gndc)"></i>ground</span>
+      </span>
+    </h2>
+    <div class="header-shroud" id="headerShroud"></div>
+  </section>
+
+  <section>
+    <h2>Onboard IMU (BMI270)</h2>
+    <div class="grid2">
+      <div class="chartbox">
+        <h3>Accelerometer (g)
+          <span class="legend">
+            <span style="color:var(--free)">X</span>
+            <span style="color:var(--uart)">Y</span>
+            <span style="color:var(--spi)">Z</span>
+          </span>
+        </h3>
+        <canvas id="accelChart"></canvas>
+      </div>
+      <div class="chartbox">
+        <h3>Gyroscope (dps)
+          <span class="legend">
+            <span style="color:var(--free)">X</span>
+            <span style="color:var(--uart)">Y</span>
+            <span style="color:var(--spi)">Z</span>
+          </span>
+        </h3>
+        <canvas id="gyroChart"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section style="border-bottom:none;">
+    <h2>I2C bus (G8 / G9)</h2>
+    <div class="buslist" id="busList"></div>
+  </section>
+
+  <footer>
+    <span id="rawline">waiting for connection…</span>
+    <span id="fps">-- fps</span>
+  </footer>
+</div>
+
+<p class="note">
+  Runs entirely in this tab via the <b>Web Serial API</b> — nothing is uploaded anywhere.
+  Works in Chrome or Edge, opened as a normal browser tab (not embedded in another page).
+  <b>Close PlatformIO's serial monitor first</b> — only one program can hold the port at a time.
+  Hover or tap any pin for what M5's docs say about it and what you can wire to it.
+</p>
+
+<div class="tip" id="tip"></div>
+
+<script>
+/* ===================== Pin metadata (from the official M5 pinmap) ===================== */
+const PIN_INFO = {
+  1:  { gpio:'G3',  label:'RESET',   kind:'free',
+        docs:'Printed "RESET" on the header silkscreen. Not wired to anything else on the Cardputer-ADV — it\u2019s a general-purpose pin; the label just hints at typical use for boards that expect a reset line.',
+        ideas:'Push button, potentiometer or analog sensor (LDR, thermistor), digital output from a PIR/reed switch, an LED (via resistor), or a reset line into an expansion module.',
+        watch:'ADC1-capable — analog readings stay accurate even if your own code later turns on Wi-Fi.' },
+  2:  { gpio:null, label:'5VIN',    kind:'power_in',
+        docs:'An input rail into the board\u2019s power system.',
+        ideas:'Only relevant if you specifically need to feed external 5V into the board.',
+        watch:'Check the schematic before wiring anything here. Feeding the wrong voltage into a power rail can damage the board or the battery charger — this isn\u2019t a pin for casual sensor wiring.' },
+  3:  { gpio:'G4',  label:'INT',     kind:'free',
+        docs:'Printed "INT" on the silkscreen — a suggested interrupt line, but electrically it\u2019s just a free GPIO.',
+        ideas:'Interrupt output from a sensor or module (motion sensor, "data ready" pin, button), or general digital I/O.',
+        watch:'ADC1-capable — reliable analog readings regardless of Wi-Fi/BT state.' },
+  4:  { gpio:null, label:'GND',     kind:'gnd',
+        docs:'Ground reference for the header.',
+        ideas:'Common ground for any external module you wire in.',
+        watch:'Always share ground with an external module, even if it has its own power supply.' },
+  5:  { gpio:'G6',  label:'BUSY',    kind:'free',
+        docs:'Printed "BUSY" on the silkscreen — a suggested status-polling line, but it\u2019s a free GPIO like the others.',
+        ideas:'Busy/status flag from a module (e-paper displays and some ADCs use a busy pin), a potentiometer, or general digital I/O.',
+        watch:'ADC1-capable — reliable analog readings regardless of Wi-Fi/BT state.' },
+  6:  { gpio:null, label:'5VOUT',   kind:'power_out',
+        docs:'A regulated 5V output rail from the board.',
+        ideas:'Powering small external 5V modules or sensor breakouts.',
+        watch:'Shares the board\u2019s battery/USB power budget — fine for light loads, but don\u2019t hang anything power-hungry (motors, big displays) off it.' },
+  7:  { gpio:'G40', label:'SCK',     kind:'spi_sd',
+        docs:'SPI clock line — physically the same net as the onboard microSD card\u2019s clock pin.',
+        ideas:'An external SPI device, but only if you\u2019re not using the onboard microSD slot at the same time.',
+        watch:'Wiring something else here while a microSD card is inserted will interfere with card access on both sides.' },
+  8:  { gpio:'G8',  label:'I2C_SDA', kind:'i2c',
+        docs:'I2C data line — the same bus the onboard BMI270 IMU, ES8311 audio codec, and TCA8418 keyboard controller already use.',
+        ideas:'Any I2C sensor breakout: SHT31, BMP280, BME280, BH1750, VL53L0X, etc. — this is the normal way to add sensors to this board.',
+        watch:'Shared bus: pick a sensor whose I2C address doesn\u2019t collide with the onboard chips (0x68 is already taken by the BMI270).' },
+  9:  { gpio:'G14', label:'MOSI',    kind:'spi_sd',
+        docs:'SPI data-out line — physically the same net as the onboard microSD card\u2019s MOSI pin.',
+        ideas:'An external SPI device, but only if you\u2019re not using the onboard microSD slot at the same time.',
+        watch:'Wiring something else here while a microSD card is inserted will interfere with card access on both sides.' },
+  10: { gpio:'G9',  label:'I2C_SCL', kind:'i2c',
+        docs:'I2C clock line — same shared bus as position 8 (SDA).',
+        ideas:'Pairs with EXT-8 for any I2C sensor breakout.',
+        watch:'Shared bus: make sure your sensor\u2019s address is unique on this bus.' },
+  11: { gpio:'G39', label:'MISO',    kind:'spi_sd',
+        docs:'SPI data-in line — physically the same net as the onboard microSD card\u2019s MISO pin.',
+        ideas:'An external SPI device, but only if you\u2019re not using the onboard microSD slot at the same time.',
+        watch:'Wiring something else here while a microSD card is inserted will interfere with card access on both sides.' },
+  12: { gpio:'G13', label:'UART_RX', kind:'uart',
+        docs:'Dedicated UART receive pin — not shared with anything else onboard.',
+        ideas:'Receiving serial data: GPS modules, another microcontroller, a Bluetooth-serial bridge.',
+        watch:'This is 3.3V logic. A 5V TTL device wired straight in can damage the pin — use a level shifter.' },
+  13: { gpio:'G5',  label:'CS',      kind:'free',
+        docs:'Printed "CS" on the silkscreen — a suggested SPI chip-select line, but it\u2019s a free GPIO.',
+        ideas:'Chip-select for an external SPI device, or general digital I/O / potentiometer input.',
+        watch:'ADC1-capable — reliable analog readings regardless of Wi-Fi/BT state.' },
+  14: { gpio:'G15', label:'UART_TX', kind:'uart',
+        docs:'Dedicated UART transmit pin — not shared with anything else onboard.',
+        ideas:'Sending serial data out: to a GPS module, another microcontroller, a Bluetooth-serial bridge.',
+        watch:'This is 3.3V logic. Feeding it into a 5V TTL input can work, but the reverse (5V into this pin) can damage it — check the other device\u2019s tolerance.' },
+};
+
+const KIND_COLOR = {
+  free:'var(--free)', uart:'var(--uart)', i2c:'var(--i2c)',
+  spi_sd:'var(--spi)', power_in:'var(--pwr)', power_out:'var(--pwr)', gnd:'var(--gndc)'
+};
+
+const SENSOR_NAMES = {
+  bmi270:'BMI270 (onboard IMU)', sht31:'SHT31', bmp280:'BMP280',
+  bme280:'BME280', bh1750:'BH1750', mpu6050:'MPU6050', vl53l0x:'VL53L0X'
+};
+
+/* ===================== Build the header grid ===================== */
+const shroud = document.getElementById('headerShroud');
+const pinEls = {};
+for (let pos = 1; pos <= 14; pos++) {
+  const info = PIN_INFO[pos];
+  const el = document.createElement('div');
+  el.className = 'pin';
+  el.tabIndex = 0;
+  el.style.borderColor = 'var(--hair)';
+  el.innerHTML = `
+    <div class="dot" style="background:${KIND_COLOR[info.kind]}"></div>
+    <div class="meta">
+      <div class="pos">PIN ${pos}${info.gpio ? ' · ' + info.gpio : ''}</div>
+      <div class="lbl" style="color:${KIND_COLOR[info.kind]}">${info.label}</div>
+      <div class="rd" data-rd>—</div>
+      <div class="bar-track" data-bar-track style="display:none"><div class="bar-fill" data-bar></div></div>
+    </div>
+  `;
+  el.addEventListener('mouseenter', e => showTip(pos, el));
+  el.addEventListener('mousemove', e => positionTip(el));
+  el.addEventListener('mouseleave', hideTip);
+  el.addEventListener('focus', e => showTip(pos, el));
+  el.addEventListener('blur', hideTip);
+  el.addEventListener('click', e => showTip(pos, el)); // touch support
+  shroud.appendChild(el);
+  pinEls[pos] = el;
+}
+
+/* ===================== Tooltip ===================== */
+const tipEl = document.getElementById('tip');
+function showTip(pos, anchorEl){
+  const info = PIN_INFO[pos];
+  tipEl.innerHTML = `
+    <div class="t-head">
+      <span class="t-gpio" style="color:${KIND_COLOR[info.kind]}">${info.gpio || 'PIN ' + pos}</span>
+      <span class="t-func">${info.label}</span>
+    </div>
+    <h4>M5 docs</h4><p>${info.docs}</p>
+    <h4>Good first things to wire here</h4><p>${info.ideas}</p>
+    <h4>Watch out for</h4><p class="warn">${info.watch}</p>
+  `;
+  positionTip(anchorEl);
+  tipEl.classList.add('show');
+}
+function positionTip(anchorEl){
+  const r = anchorEl.getBoundingClientRect();
+  const tw = 300;
+  let left = r.right + 10;
+  if (left + tw > window.innerWidth - 10) left = r.left - tw - 10;
+  let top = r.top;
+  if (top + 220 > window.innerHeight) top = window.innerHeight - 230;
+  tipEl.style.left = Math.max(10,left) + 'px';
+  tipEl.style.top = Math.max(10,top) + 'px';
+}
+function hideTip(){ tipEl.classList.remove('show'); }
+
+/* ===================== I2C device panel ===================== */
+const busList = document.getElementById('busList');
+function renderBus(sensors, addrs){
+  busList.innerHTML = '';
+  Object.keys(SENSOR_NAMES).forEach(key=>{
+    const on = !!(sensors && sensors[key]);
+    const chip = document.createElement('span');
+    chip.className = 'chip' + (on ? ' on' : '');
+    chip.textContent = SENSOR_NAMES[key];
+    busList.appendChild(chip);
+  });
+  (addrs || []).forEach(addr=>{
+    const chip = document.createElement('span');
+    chip.className = 'chip on';
+    chip.innerHTML = `raw <span class="addr">${addr}</span>`;
+    busList.appendChild(chip);
+  });
+}
+renderBus({}, []);
+
+/* ===================== Charts ===================== */
+const WINDOW_LEN = 150;
+Chart.defaults.font.family = "IBM Plex Mono, monospace";
+Chart.defaults.font.size = 10;
+Chart.defaults.color = "#5E7A6E";
+
+function makeChart(ctx, colors){
+  return new Chart(ctx, {
+    type:'line',
+    data:{ labels:Array(WINDOW_LEN).fill(''), datasets:colors.map(c=>({
+      data:[], borderColor:c, borderWidth:1.5, pointRadius:0, tension:0.25
+    })) },
+    options:{
+      animation:false, responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'nearest', intersect:false },
+      scales:{ x:{ display:false }, y:{ grid:{ color:'#1B3328' }, ticks:{ color:'#5E7A6E' } } },
+      plugins:{ legend:{ display:false } }
+    }
+  });
+}
+const accelChart = makeChart(document.getElementById('accelChart'), ['#3FEE8F','#5FC9F8','#FFB347']);
+const gyroChart  = makeChart(document.getElementById('gyroChart'),  ['#3FEE8F','#5FC9F8','#FFB347']);
+function pushPoint(chart, values){
+  chart.data.datasets.forEach((ds,i)=>{ ds.data.push(values[i]); if (ds.data.length > WINDOW_LEN) ds.data.shift(); });
+  chart.update('none');
+}
+
+/* ===================== Live pin readout ===================== */
+function updatePins(gpioArr){
+  gpioArr.forEach(p=>{
+    const el = pinEls[p.pos];
+    if (!el) return;
+    const rd = el.querySelector('[data-rd]');
+    const track = el.querySelector('[data-bar-track]');
+    const bar = el.querySelector('[data-bar]');
+    const dot = el.querySelector('.dot');
+
+    if (p.kind === 'free' || p.kind === 'uart') {
+      dot.classList.toggle('hi', p.d === 1);
+      dot.style.color = KIND_COLOR[p.kind];
+      if (typeof p.a === 'number') {
+        const volts = (p.a * 3.3 / 4095).toFixed(2);
+        rd.textContent = `d=${p.d}  ${volts}V${p.adc2 ? ' \u26A0' : ''}`;
+        track.style.display = 'block';
+        bar.style.width = Math.min(100, p.a/4095*100).toFixed(0) + '%';
+        bar.style.background = KIND_COLOR[p.kind];
+      } else {
+        rd.textContent = `digital=${p.d}`;
+        track.style.display = 'none';
+      }
+    } else if (p.kind === 'i2c') {
+      rd.textContent = 'shared I2C bus';
+      track.style.display = 'none';
+    } else if (p.kind === 'spi_sd') {
+      rd.textContent = 'shared w/ onboard SD';
+      track.style.display = 'none';
+    } else if (p.kind === 'power_in' || p.kind === 'power_out') {
+      rd.textContent = 'power rail';
+      track.style.display = 'none';
+    } else {
+      rd.textContent = 'ground';
+      track.style.display = 'none';
+    }
+  });
+}
+
+/* ===================== Serial plumbing ===================== */
+let port, reader, keepReading = false;
+let lineBuffer = "";
+let frameCount = 0, lastFpsTs = performance.now();
+
+const led = document.getElementById('led');
+const rawline = document.getElementById('rawline');
+const fpsEl = document.getElementById('fps');
+const connectBtn = document.getElementById('connectBtn');
+const disconnectBtn = document.getElementById('disconnectBtn');
+const baudSel = document.getElementById('baud');
+
+function handleLine(line){
+  line = line.trim();
+  if (!line) return;
+  if (!line.startsWith('PLOT:')) return; // ignore the human-readable block
+
+  let frame;
+  try {
+    frame = JSON.parse(line.slice(5));
+  } catch (e) {
+    return; // partial/corrupt line - just skip it, next frame will be fine
+  }
+
+  rawline.textContent = `t=${frame.t}  accel=[${frame.accel.map(v=>v.toFixed(2))}]  gyro=[${frame.gyro.map(v=>v.toFixed(1))}]`;
+
+  pushPoint(accelChart, frame.accel);
+  pushPoint(gyroChart, frame.gyro);
+  updatePins(frame.gpio || []);
+  renderBus(frame.sensors, frame.i2c);
+
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTs > 1000) {
+    fpsEl.textContent = frameCount + ' fps';
+    frameCount = 0;
+    lastFpsTs = now;
+  }
+}
+
+async function connect(){
+  if (!('serial' in navigator)) {
+    alert('Web Serial isn\'t available. Use Chrome or Edge, and open this file as a normal tab (not inside an embedded preview).');
+    return;
+  }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: parseInt(baudSel.value) });
+
+    led.classList.add('live');
+    connectBtn.disabled = true;
+    disconnectBtn.disabled = false;
+    baudSel.disabled = true;
+    rawline.textContent = 'connected — waiting for data…';
+
+    keepReading = true;
+    const decoder = new TextDecoderStream();
+    port.readable.pipeTo(decoder.writable);
+    reader = decoder.readable.getReader();
+
+    while (keepReading) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) {
+        lineBuffer += value;
+        let idx;
+        while ((idx = lineBuffer.indexOf('\n')) >= 0) {
+          handleLine(lineBuffer.slice(0, idx));
+          lineBuffer = lineBuffer.slice(idx + 1);
+        }
+      }
+    }
+  } catch (err) {
+    console.error(err);
+    rawline.textContent = 'error: ' + err.message;
+    await disconnect();
+  }
+}
+
+async function disconnect(){
+  keepReading = false;
+  led.classList.remove('live');
+  connectBtn.disabled = false;
+  disconnectBtn.disabled = true;
+  baudSel.disabled = false;
+  try {
+    if (reader) { await reader.cancel(); reader.releaseLock(); }
+    if (port) await port.close();
+  } catch (e) { /* already closed */ }
+  rawline.textContent = 'disconnected';
+}
+
+connectBtn.addEventListener('click', connect);
+disconnectBtn.addEventListener('click', disconnect);
+</script>
+</body>
+</html>
